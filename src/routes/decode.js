@@ -1,6 +1,6 @@
 import { Router } from "express";
 import Anthropic from "@anthropic-ai/sdk";
-import { lookupDeclineCode, sezzleDeclines, marqetaDeclines } from "../data/declineCodes.js";
+import { lookupDeclineCode } from "../data/declineCodes.js";
 import { getUser } from "../data/mockUsers.js";
 
 const router = Router();
@@ -66,9 +66,11 @@ DECLINE DETAILS:
 - Category: ${codeInfo.category}
 - Merchant: ${merchantName || "Unknown"}
 - Amount attempted: $${amount || "Unknown"}
-- Base explanation: ${codeInfo.plainLanguage}
-- Recommended action: ${codeInfo.whatToDo}
+- Why it happened: ${codeInfo.aiResponse.whyItHappened}
+- Steps to fix: ${codeInfo.aiResponse.steps.join("; ")}
+- Time to fix: ${codeInfo.aiResponse.timeToFix}
 - Is actionable: ${codeInfo.actionable}
+- Current generic message: ${codeInfo.currentMessage}
 
 Generate a personalized, friendly response for this specific user and their specific situation.`;
 
@@ -92,9 +94,9 @@ Generate a personalized, friendly response for this specific user and their spec
     } catch (parseErr) {
       // Fallback to static response if AI parsing fails
       aiResponse = {
-        explanation: codeInfo.plainLanguage,
-        impact: codeInfo.impact || "This is usually easy to resolve.",
-        actions: [codeInfo.whatToDo],
+        explanation: codeInfo.aiResponse.whyItHappened,
+        impact: `Time to fix: ${codeInfo.aiResponse.timeToFix}`,
+        actions: codeInfo.aiResponse.steps,
         estimatedSuccessAfterFix: codeInfo.actionable ? 0.8 : 0.1,
         encouragement: "You've got this — most declines are quick fixes!"
       };
@@ -104,15 +106,15 @@ Generate a personalized, friendly response for this specific user and their spec
       code: declineCode,
       name: codeInfo.name,
       category: codeInfo.category,
-      source: codeInfo.source,
       actionable: codeInfo.actionable,
-      weeklyVolume: codeInfo.weeklyVolume,
+      currentMessage: codeInfo.currentMessage,
       explanation: aiResponse.explanation,
       impact: aiResponse.impact,
       actions: aiResponse.actions,
       estimatedSuccessAfterFix: aiResponse.estimatedSuccessAfterFix,
       encouragement: aiResponse.encouragement,
-      severity: codeInfo.actionable ? "medium" : "low"
+      timeToFix: codeInfo.aiResponse.timeToFix,
+      canWeHelp: codeInfo.aiResponse.canWeHelp
     });
 
   } catch (error) {
@@ -126,14 +128,15 @@ Generate a personalized, friendly response for this specific user and their spec
       code: declineCode,
       name: codeInfo.name,
       category: codeInfo.category,
-      source: codeInfo.source,
       actionable: codeInfo.actionable,
-      explanation: codeInfo.plainLanguage,
-      impact: "We're having trouble generating a personalized response right now.",
-      actions: [codeInfo.whatToDo],
+      currentMessage: codeInfo.currentMessage,
+      explanation: codeInfo.aiResponse.whyItHappened,
+      impact: `Time to fix: ${codeInfo.aiResponse.timeToFix}`,
+      actions: codeInfo.aiResponse.steps,
       estimatedSuccessAfterFix: codeInfo.actionable ? 0.75 : 0.1,
       encouragement: "Most declines are quick fixes — you've got this!",
-      severity: "medium",
+      timeToFix: codeInfo.aiResponse.timeToFix,
+      canWeHelp: codeInfo.aiResponse.canWeHelp,
       _fallback: true
     });
   }
