@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { initDb } from "./db/index.js";
 import decodeRouter from "./routes/decode.js";
 import riskRouter from "./routes/risk.js";
 import usersRouter from "./routes/users.js";
@@ -34,7 +35,7 @@ app.use(express.json());
 // Routes
 // ============================================================
 
-app.get("/api/health", (req, res) => {
+app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString(), service: "decline-decoder-api" });
 });
 
@@ -43,11 +44,15 @@ app.use("/api/pre-checkout-risk", riskRouter);
 app.use("/api", usersRouter);
 
 // ============================================================
-// Start server
+// Startup — mirrors salesforce main.go: InitDB → Migrate → Run
 // ============================================================
 
-app.listen(PORT, () => {
-  console.log(`
+async function start() {
+  // InitDB + Migrate + Seed (mirrors gorm.InitDB() then gorm.Migrate())
+  await initDb();
+
+  app.listen(PORT, () => {
+    console.log(`
 ╔══════════════════════════════════════════════╗
 ║       Decline Decoder API                   ║
 ║       Running on port ${PORT}                  ║
@@ -60,5 +65,11 @@ app.listen(PORT, () => {
 ║  GET  /api/user-profile/:userId              ║
 ║  GET  /api/decline-history/:userId           ║
 ╚══════════════════════════════════════════════╝
-  `);
+    `);
+  });
+}
+
+start().catch(err => {
+  console.error("Failed to start server:", err.message);
+  process.exit(1);
 });

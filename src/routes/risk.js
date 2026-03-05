@@ -31,28 +31,24 @@ Respond in JSON:
   "sweetSpotAmount": number
 }`;
 
-// Calculate risk factors from user data
-function calculateRiskFactors(user, amount, merchantName) {
-  let riskScore = 0; // 0 = no risk, 100 = guaranteed decline
+function calculateRiskFactors(user, amount) {
+  let riskScore = 0;
   const factors = [];
 
-  // Factor 1: Spending power
   if (amount > user.availableSpendingPower) {
     riskScore += 40;
     factors.push(`Purchase ($${amount}) exceeds spending power ($${user.availableSpendingPower})`);
   } else if (amount > user.availableSpendingPower * 0.8) {
     riskScore += 15;
-    factors.push(`Purchase is close to spending limit (${Math.round(amount/user.availableSpendingPower*100)}% of available)`);
+    factors.push(`Purchase is close to spending limit (${Math.round(amount / user.availableSpendingPower * 100)}% of available)`);
   }
 
-  // Factor 2: Overdue payments
   const overdueOrders = user.activeOrders.filter(o => o.status === "overdue");
   if (overdueOrders.length > 0) {
     riskScore += 25;
     factors.push(`${overdueOrders.length} overdue payment(s) totaling $${user.overdueAmount}`);
   }
 
-  // Factor 3: Failed/rescheduled payments
   if (user.failedPayments > 0) {
     riskScore += 30;
     factors.push(`Outstanding failed payments`);
@@ -62,24 +58,18 @@ function calculateRiskFactors(user, amount, merchantName) {
     factors.push(`Rescheduled payments pending`);
   }
 
-  // Factor 4: Purchase request
   if (!user.hasPurchaseRequest) {
     riskScore += 50;
     factors.push(`No active purchase request`);
   }
 
-  // Cap at 100
   riskScore = Math.min(riskScore, 100);
 
-  // Calculate success probability
   const successProbability = Math.max(0, Math.min(1, (100 - riskScore) / 100));
-
-  // Risk level
   let riskLevel = "low";
   if (successProbability < 0.5) riskLevel = "high";
   else if (successProbability < 0.8) riskLevel = "medium";
 
-  // Sweet spot: max amount likely to succeed
   let maxApproved = user.availableSpendingPower;
   if (overdueOrders.length > 0) {
     maxApproved = Math.max(0, maxApproved - user.overdueAmount * 0.5);
@@ -92,31 +82,30 @@ function calculateRiskFactors(user, amount, merchantName) {
     successProbability: Math.round(successProbability * 100) / 100,
     factors,
     maxApprovedAmount: Math.round(maxApproved * 100) / 100,
-    sweetSpotAmount: Math.round(sweetSpot * 100) / 100
+    sweetSpotAmount:   Math.round(sweetSpot * 100) / 100
   };
 }
 
 // POST /api/pre-checkout-risk
 router.post("/", async (req, res) => {
   try {
-    const { userId, merchantName, amount } = req.body;
+    const { userId, merchantName } = req.body;
 
-    if (amount === undefined || amount === null) {
+    if (req.body.amount === undefined || req.body.amount === null) {
       return res.status(400).json({
         error: { code: "MISSING_AMOUNT", message: "amount is required" }
       });
     }
-    const parsedAmount = Number(amount);
+    const parsedAmount = Number(req.body.amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       return res.status(400).json({
         error: { code: "INVALID_AMOUNT", message: "amount must be a positive number" }
       });
     }
 
-    const user = getUser(userId);
-    const riskCalc = calculateRiskFactors(user, parsedAmount, merchantName);
+    const user = await getUser(userId);
+    const riskCalc = calculateRiskFactors(user, parsedAmount);
 
-    // Build context for Claude
     const userContext = `
 USER: ${user.name}
 - Available spending power: $${user.availableSpendingPower} of $${user.totalSpendingPower}
@@ -163,59 +152,59 @@ Generate a personalized, friendly risk assessment.`;
           ? ["Check your Sezzle app for any outstanding payments", "Consider a lower purchase amount"]
           : ["You're in good shape — go ahead with your purchase!"],
         maxApprovedAmount: riskCalc.maxApprovedAmount,
-        sweetSpotAmount: riskCalc.sweetSpotAmount
+        sweetSpotAmount:   riskCalc.sweetSpotAmount
       };
     }
 
     res.json({
-      riskLevel: aiResponse.riskLevel ?? riskCalc.riskLevel,
+      riskLevel:          aiResponse.riskLevel          ?? riskCalc.riskLevel,
       successProbability: aiResponse.successProbability ?? riskCalc.successProbability,
-      explanation: aiResponse.explanation,
-      tips: aiResponse.tips,
-      maxApprovedAmount: aiResponse.maxApprovedAmount ?? riskCalc.maxApprovedAmount,
-      sweetSpotAmount: aiResponse.sweetSpotAmount ?? riskCalc.sweetSpotAmount
+      explanation:        aiResponse.explanation,
+      tips:               aiResponse.tips,
+      maxApprovedAmount:  aiResponse.maxApprovedAmount  ?? riskCalc.maxApprovedAmount,
+      sweetSpotAmount:    aiResponse.sweetSpotAmount    ?? riskCalc.sweetSpotAmount
     });
 
   } catch (error) {
     console.error("Risk check error:", error.message);
-    const user = getUser(req.body.userId);
+    const user = await getUser(req.body.userId);
     const parsedAmount = Number(req.body.amount);
-    const riskCalc = calculateRiskFactors(user, parsedAmount, req.body.merchantName);
+    const riskCalc = calculateRiskFactors(user, parsedAmount);
 
     res.json({
-      riskLevel: riskCalc.riskLevel,
+      riskLevel:          riskCalc.riskLevel,
       successProbability: riskCalc.successProbability,
-      factors: riskCalc.factors,
-      maxApprovedAmount: riskCalc.maxApprovedAmount,
-      sweetSpotAmount: riskCalc.sweetSpotAmount,
-      explanation: `Based on your account, this purchase has a ${riskCalc.riskLevel} risk level.`,
-      tips: ["Check your Sezzle app for any outstanding payments"]
+      factors:            riskCalc.factors,
+      maxApprovedAmount:  riskCalc.maxApprovedAmount,
+      sweetSpotAmount:    riskCalc.sweetSpotAmount,
+      explanation:        `Based on your account, this purchase has a ${riskCalc.riskLevel} risk level.`,
+      tips:               ["Check your Sezzle app for any outstanding payments"]
     });
   }
 });
 
-// POST /api/pre-checkout-risk/what-if (for the slider)
-router.post("/what-if", (req, res) => {
+// POST /api/pre-checkout-risk/what-if (for the slider — no AI, fast)
+router.post("/what-if", async (req, res) => {
   try {
-    const { userId, merchantName, amount } = req.body;
+    const { userId } = req.body;
 
-    if (amount === undefined || amount === null) {
+    if (req.body.amount === undefined || req.body.amount === null) {
       return res.status(400).json({
         error: { code: "MISSING_AMOUNT", message: "amount is required" }
       });
     }
-    const parsedAmount = Number(amount);
+    const parsedAmount = Number(req.body.amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       return res.status(400).json({
         error: { code: "INVALID_AMOUNT", message: "amount must be a positive number" }
       });
     }
 
-    const user = getUser(userId);
-    const riskCalc = calculateRiskFactors(user, parsedAmount, merchantName);
+    const user = await getUser(userId);
+    const riskCalc = calculateRiskFactors(user, parsedAmount);
 
     res.json({
-      riskLevel: riskCalc.riskLevel,
+      riskLevel:          riskCalc.riskLevel,
       successProbability: riskCalc.successProbability,
       explanation: parsedAmount <= riskCalc.sweetSpotAmount
         ? `$${parsedAmount} is within your safe zone — this should go through!`
@@ -223,7 +212,7 @@ router.post("/what-if", (req, res) => {
           ? `$${parsedAmount} is possible but close to your limit.`
           : `$${parsedAmount} is risky — your effective limit is about $${riskCalc.maxApprovedAmount} right now.`,
       maxApprovedAmount: riskCalc.maxApprovedAmount,
-      sweetSpotAmount: riskCalc.sweetSpotAmount
+      sweetSpotAmount:   riskCalc.sweetSpotAmount
     });
   } catch (error) {
     console.error("What-if error:", error.message);

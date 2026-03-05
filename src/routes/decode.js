@@ -44,11 +44,12 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Look up the code from our database
-    const codeInfo = lookupDeclineCode(declineCode);
-    const user = getUser(userId);
+    // Parallel DB lookups
+    const [codeInfo, user] = await Promise.all([
+      lookupDeclineCode(declineCode),
+      getUser(userId)
+    ]);
 
-    // Build context for Claude
     const userContext = `
 USER CONTEXT:
 - Name: ${user.name}
@@ -75,22 +76,17 @@ DECLINE DETAILS:
 
 Generate a personalized, friendly response for this specific user and their specific situation.`;
 
-    // Call Claude API
     const message = await getAnthropicClient().messages.create({
       model: AI_MODEL,
       max_tokens: 512,
-      messages: [
-        { role: "user", content: userContext }
-      ],
+      messages: [{ role: "user", content: userContext }],
       system: SYSTEM_PROMPT
     });
 
-    // Parse Claude's response
     let aiResponse;
     try {
       aiResponse = parseAIJson(message.content[0].text);
-    } catch (parseErr) {
-      // Fallback to static response if AI parsing fails
+    } catch {
       aiResponse = {
         explanation: codeInfo.aiResponse.whyItHappened,
         impact: `Time to fix: ${codeInfo.aiResponse.timeToFix}`,
@@ -117,10 +113,8 @@ Generate a personalized, friendly response for this specific user and their spec
 
   } catch (error) {
     console.error("Decode error:", error.message);
-
-    // Graceful fallback — still return useful info even if AI fails
     const { declineCode } = req.body;
-    const codeInfo = lookupDeclineCode(declineCode);
+    const codeInfo = await lookupDeclineCode(declineCode);
 
     res.json({
       code: declineCode,

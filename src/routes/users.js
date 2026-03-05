@@ -5,10 +5,9 @@ import { lookupDeclineCode } from "../data/declineCodes.js";
 const router = Router();
 
 // GET /api/user-profile/:userId
-router.get("/user-profile/:userId", (req, res) => {
-  const user = getUser(req.params.userId);
+router.get("/user-profile/:userId", async (req, res) => {
+  const user = await getUser(req.params.userId);
 
-  // Calculate success probability from account health
   let prob = 1.0;
   const overdueOrders = user.activeOrders.filter(o => o.status === "overdue");
   if (overdueOrders.length > 0) prob -= 0.15 * overdueOrders.length;
@@ -25,31 +24,32 @@ router.get("/user-profile/:userId", (req, res) => {
 });
 
 // GET /api/decline-history/:userId
-router.get("/decline-history/:userId", (req, res) => {
-  const user = getUser(req.params.userId);
+router.get("/decline-history/:userId", async (req, res) => {
+  const user = await getUser(req.params.userId);
   const { status } = req.query;
   const limit = parseInt(req.query.limit, 10);
   const safeLimit = isNaN(limit) || limit <= 0 ? 10 : limit;
 
   let declines = user.declineHistory || [];
 
-  // Filter by status if provided
   if (status && status !== "all") {
     declines = declines.filter(d => d.status === status);
   }
 
-  // Enrich with code details
-  const enriched = declines.slice(0, safeLimit).map(d => {
-    const codeInfo = lookupDeclineCode(d.code);
-    return {
-      ...d,
-      codeName: codeInfo.name,
-      category: codeInfo.category,
-      actionable: codeInfo.actionable,
-      plainLanguage: codeInfo.plainLanguage,
-      whatToDo: codeInfo.whatToDo
-    };
-  });
+  // Enrich with code details — parallel lookups
+  const enriched = await Promise.all(
+    declines.slice(0, safeLimit).map(async d => {
+      const codeInfo = await lookupDeclineCode(d.code);
+      return {
+        ...d,
+        codeName:      codeInfo.name,
+        category:      codeInfo.category,
+        actionable:    codeInfo.actionable,
+        plainLanguage: codeInfo.aiResponse.whyItHappened,
+        whatToDo:      codeInfo.aiResponse.steps
+      };
+    })
+  );
 
   const allDeclines = user.declineHistory || [];
   const total = allDeclines.length;
