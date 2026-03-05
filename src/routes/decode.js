@@ -1,14 +1,9 @@
 import { Router } from "express";
-import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropicClient, parseAIJson, AI_MODEL } from "../lib/ai.js";
 import { lookupDeclineCode } from "../data/declineCodes.js";
 import { getUser } from "../data/mockUsers.js";
 
 const router = Router();
-let _anthropic;
-function getAnthropicClient() {
-  if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  return _anthropic;
-}
 
 const SYSTEM_PROMPT = `You are Decline Decoder, a helpful AI assistant for Sezzle consumers.
 You translate virtual card decline codes into plain, friendly language.
@@ -35,19 +30,26 @@ Respond in JSON format with these fields:
 // POST /api/decode-decline
 router.post("/", async (req, res) => {
   try {
-    const { declineCode, merchantName, amount, userId } = req.body;
+    const { declineCode, merchantName, userId } = req.body;
+    const amount = req.body.amount !== undefined ? Number(req.body.amount) : undefined;
 
     if (!declineCode) {
       return res.status(400).json({
         error: { code: "MISSING_DECLINE_CODE", message: "declineCode is required" }
       });
     }
+    if (amount !== undefined && (isNaN(amount) || amount <= 0)) {
+      return res.status(400).json({
+        error: { code: "INVALID_AMOUNT", message: "amount must be a positive number" }
+      });
+    }
 
-    // Look up the code from our database
-    const codeInfo = lookupDeclineCode(declineCode);
-    const user = getUser(userId);
+    // Parallel DB lookups
+    const [codeInfo, user] = await Promise.all([
+      lookupDeclineCode(declineCode),
+      getUser(userId)
+    ]);
 
-    // Build context for Claude
     const userContext = `
 USER CONTEXT:
 - Name: ${user.name}
@@ -65,7 +67,7 @@ DECLINE DETAILS:
 - Code name: ${codeInfo.name}
 - Category: ${codeInfo.category}
 - Merchant: ${merchantName || "Unknown"}
-- Amount attempted: $${amount || "Unknown"}
+- Amount attempted: ${amount !== undefined ? `$${amount}` : "Unknown"}
 - Why it happened: ${codeInfo.aiResponse.whyItHappened}
 - Steps to fix: ${codeInfo.aiResponse.steps.join("; ")}
 - Time to fix: ${codeInfo.aiResponse.timeToFix}
@@ -74,25 +76,17 @@ DECLINE DETAILS:
 
 Generate a personalized, friendly response for this specific user and their specific situation.`;
 
-    // Call Claude API
     const message = await getAnthropicClient().messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model: AI_MODEL,
       max_tokens: 512,
-      messages: [
-        { role: "user", content: userContext }
-      ],
+      messages: [{ role: "user", content: userContext }],
       system: SYSTEM_PROMPT
     });
 
-    // Parse Claude's response
     let aiResponse;
     try {
-      const text = message.content[0].text;
-      // Extract JSON from the response (handle markdown code blocks)
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      aiResponse = JSON.parse(jsonMatch ? jsonMatch[0] : text);
-    } catch (parseErr) {
-      // Fallback to static response if AI parsing fails
+      aiResponse = parseAIJson(message.content[0].text);
+    } catch {
       aiResponse = {
         explanation: codeInfo.aiResponse.whyItHappened,
         impact: `Time to fix: ${codeInfo.aiResponse.timeToFix}`,
@@ -119,10 +113,8 @@ Generate a personalized, friendly response for this specific user and their spec
 
   } catch (error) {
     console.error("Decode error:", error.message);
-
-    // Graceful fallback — still return useful info even if AI fails
     const { declineCode } = req.body;
-    const codeInfo = lookupDeclineCode(declineCode);
+    const codeInfo = await lookupDeclineCode(declineCode);
 
     res.json({
       code: declineCode,
@@ -136,8 +128,7 @@ Generate a personalized, friendly response for this specific user and their spec
       estimatedSuccessAfterFix: codeInfo.actionable ? 0.75 : 0.1,
       encouragement: "Most declines are quick fixes — you've got this!",
       timeToFix: codeInfo.aiResponse.timeToFix,
-      canWeHelp: codeInfo.aiResponse.canWeHelp,
-      _fallback: true
+      canWeHelp: codeInfo.aiResponse.canWeHelp
     });
   }
 });
