@@ -1,13 +1,8 @@
 import { Router } from "express";
-import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropicClient, parseAIJson, AI_MODEL } from "../lib/ai.js";
 import { getUser } from "../data/mockUsers.js";
 
 const router = Router();
-let _anthropic;
-function getAnthropicClient() {
-  if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  return _anthropic;
-}
 
 const RISK_SYSTEM_PROMPT = `You are Decline Decoder's pre-checkout risk advisor.
 You analyze a Sezzle user's account state and predict whether a purchase will succeed.
@@ -69,7 +64,7 @@ function calculateRiskFactors(user, amount, merchantName) {
 
   // Factor 4: Purchase request
   if (!user.hasPurchaseRequest) {
-    riskScore += 50; // This is a guaranteed decline
+    riskScore += 50;
     factors.push(`No active purchase request`);
   }
 
@@ -106,14 +101,20 @@ router.post("/", async (req, res) => {
   try {
     const { userId, merchantName, amount } = req.body;
 
-    if (!amount) {
+    if (amount === undefined || amount === null) {
       return res.status(400).json({
         error: { code: "MISSING_AMOUNT", message: "amount is required" }
       });
     }
+    const parsedAmount = Number(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({
+        error: { code: "INVALID_AMOUNT", message: "amount must be a positive number" }
+      });
+    }
 
     const user = getUser(userId);
-    const riskCalc = calculateRiskFactors(user, amount, merchantName);
+    const riskCalc = calculateRiskFactors(user, parsedAmount, merchantName);
 
     // Build context for Claude
     const userContext = `
@@ -129,7 +130,7 @@ ${user.activeOrders.filter(o => o.status === "overdue").map(o =>
 
 ATTEMPTED PURCHASE:
 - Merchant: ${merchantName || "Unknown store"}
-- Amount: $${amount}
+- Amount: $${parsedAmount}
 
 RISK CALCULATION:
 - Risk score: ${riskCalc.riskScore}/100
@@ -142,7 +143,7 @@ RISK CALCULATION:
 Generate a personalized, friendly risk assessment.`;
 
     const message = await getAnthropicClient().messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model: AI_MODEL,
       max_tokens: 512,
       messages: [{ role: "user", content: userContext }],
       system: RISK_SYSTEM_PROMPT
@@ -150,9 +151,7 @@ Generate a personalized, friendly risk assessment.`;
 
     let aiResponse;
     try {
-      const text = message.content[0].text;
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      aiResponse = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+      aiResponse = parseAIJson(message.content[0].text);
     } catch {
       aiResponse = {
         riskLevel: riskCalc.riskLevel,
@@ -169,46 +168,67 @@ Generate a personalized, friendly risk assessment.`;
     }
 
     res.json({
-      riskLevel: aiResponse.riskLevel || riskCalc.riskLevel,
-      successProbability: aiResponse.successProbability || riskCalc.successProbability,
+      riskLevel: aiResponse.riskLevel ?? riskCalc.riskLevel,
+      successProbability: aiResponse.successProbability ?? riskCalc.successProbability,
       explanation: aiResponse.explanation,
       tips: aiResponse.tips,
-      maxApprovedAmount: aiResponse.maxApprovedAmount || riskCalc.maxApprovedAmount,
-      sweetSpotAmount: aiResponse.sweetSpotAmount || riskCalc.sweetSpotAmount
+      maxApprovedAmount: aiResponse.maxApprovedAmount ?? riskCalc.maxApprovedAmount,
+      sweetSpotAmount: aiResponse.sweetSpotAmount ?? riskCalc.sweetSpotAmount
     });
 
   } catch (error) {
     console.error("Risk check error:", error.message);
     const user = getUser(req.body.userId);
-    const riskCalc = calculateRiskFactors(user, req.body.amount, req.body.merchantName);
+    const parsedAmount = Number(req.body.amount);
+    const riskCalc = calculateRiskFactors(user, parsedAmount, req.body.merchantName);
 
     res.json({
-      ...riskCalc,
+      riskLevel: riskCalc.riskLevel,
+      successProbability: riskCalc.successProbability,
+      factors: riskCalc.factors,
+      maxApprovedAmount: riskCalc.maxApprovedAmount,
+      sweetSpotAmount: riskCalc.sweetSpotAmount,
       explanation: `Based on your account, this purchase has a ${riskCalc.riskLevel} risk level.`,
-      tips: ["Check your Sezzle app for any outstanding payments"],
-      _fallback: true
+      tips: ["Check your Sezzle app for any outstanding payments"]
     });
   }
 });
 
 // POST /api/pre-checkout-risk/what-if (for the slider)
-router.post("/what-if", async (req, res) => {
-  const { userId, merchantName, amount } = req.body;
-  const user = getUser(userId);
-  const riskCalc = calculateRiskFactors(user, amount, merchantName);
+router.post("/what-if", (req, res) => {
+  try {
+    const { userId, merchantName, amount } = req.body;
 
-  // Quick response — no AI call for the slider (needs to be fast)
-  res.json({
-    riskLevel: riskCalc.riskLevel,
-    successProbability: riskCalc.successProbability,
-    explanation: amount <= riskCalc.sweetSpotAmount
-      ? `$${amount} is within your safe zone — this should go through!`
-      : amount <= riskCalc.maxApprovedAmount
-        ? `$${amount} is possible but close to your limit.`
-        : `$${amount} is risky — your effective limit is about $${riskCalc.maxApprovedAmount} right now.`,
-    maxApprovedAmount: riskCalc.maxApprovedAmount,
-    sweetSpotAmount: riskCalc.sweetSpotAmount
-  });
+    if (amount === undefined || amount === null) {
+      return res.status(400).json({
+        error: { code: "MISSING_AMOUNT", message: "amount is required" }
+      });
+    }
+    const parsedAmount = Number(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({
+        error: { code: "INVALID_AMOUNT", message: "amount must be a positive number" }
+      });
+    }
+
+    const user = getUser(userId);
+    const riskCalc = calculateRiskFactors(user, parsedAmount, merchantName);
+
+    res.json({
+      riskLevel: riskCalc.riskLevel,
+      successProbability: riskCalc.successProbability,
+      explanation: parsedAmount <= riskCalc.sweetSpotAmount
+        ? `$${parsedAmount} is within your safe zone — this should go through!`
+        : parsedAmount <= riskCalc.maxApprovedAmount
+          ? `$${parsedAmount} is possible but close to your limit.`
+          : `$${parsedAmount} is risky — your effective limit is about $${riskCalc.maxApprovedAmount} right now.`,
+      maxApprovedAmount: riskCalc.maxApprovedAmount,
+      sweetSpotAmount: riskCalc.sweetSpotAmount
+    });
+  } catch (error) {
+    console.error("What-if error:", error.message);
+    res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Unable to calculate risk" } });
+  }
 });
 
 export default router;
