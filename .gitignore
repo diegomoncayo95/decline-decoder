@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Environment variables (NEVER commit)
+.env
+.env.local
+.env.production
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.log
+
+# Hackathon docs (these live in ../docs/)
+docs/
