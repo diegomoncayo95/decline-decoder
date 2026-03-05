@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { getAnthropicClient, parseAIJson, AI_MODEL } from "../lib/ai.js";
-import { lookupDeclineCode } from "../data/declineCodes.js";
-import { getUser } from "../data/mockUsers.js";
+import { lookupDeclineCode, getUser } from "../db/index.js";
 
 const router = Router();
 

@@ -1,6 +1,5 @@
 import { Router } from "express";
-import { getUser } from "../data/mockUsers.js";
-import { lookupDeclineCode } from "../data/declineCodes.js";
+import { getUser, lookupDeclineCode } from "../db/index.js";
 
 const router = Router();
 
@@ -36,7 +35,6 @@ router.get("/decline-history/:userId", async (req, res) => {
     declines = declines.filter(d => d.status === status);
   }
 
-  // Enrich with code details — parallel lookups
   const enriched = await Promise.all(
     declines.slice(0, safeLimit).map(async d => {
       const codeInfo = await lookupDeclineCode(d.code);
@@ -55,16 +53,11 @@ router.get("/decline-history/:userId", async (req, res) => {
   const total = allDeclines.length;
   const resolved = allDeclines.filter(d => d.status === "resolved").length;
 
-  let approvalRateTrend = "no history";
-  if (total > 0) {
-    approvalRateTrend = resolved > total / 2 ? "improving" : "needs attention";
-  }
-
   res.json({
     userId: user.userId,
     totalDeclines: total,
     resolvedCount: resolved,
-    approvalRateTrend,
+    approvalRateTrend: total > 0 ? (resolved > total / 2 ? "improving" : "needs attention") : "no history",
     declines: enriched
   });
 });

@@ -8,8 +8,21 @@ import decodeRouter from "./routes/decode.js";
 import riskRouter from "./routes/risk.js";
 import usersRouter from "./routes/users.js";
 
+import fs from "fs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: join(__dirname, "..", ".env") });
+const envPath = join(__dirname, "..", ".env");
+dotenv.config({ path: envPath });
+
+// Fallback: manually read .env if dotenv didn't set the key
+if (!process.env.ANTHROPIC_API_KEY && fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, "utf-8");
+  for (const line of envContent.split("\n")) {
+    const match = line.match(/^([^#=]+)=(.+)/);
+    if (match && !process.env[match[1].trim()]) {
+      process.env[match[1].trim()] = match[2].trim();
+    }
+  }
+}
 
 if (!process.env.ANTHROPIC_API_KEY) {
   console.error("ANTHROPIC_API_KEY is not set. Check your .env file.");

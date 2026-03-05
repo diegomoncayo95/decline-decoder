@@ -1,31 +1,31 @@
-// MySQL connection pool — mirrors salesforce gorm/gorm.go InitDB() pattern
-import mysql from "mysql2/promise";
-import { DbHostname, DbPort, DbUsername, DbPassword, DbName, validateConfig } from "./config.js";
+// PostgreSQL connection pool for Aurora
+import pg from "pg";
+const { Pool } = pg;
 
-// Singleton pool — mirrors `var DB *gorm.DB` in gorm.go
 let DB;
 
-// InitDB — mirrors gorm.go InitDB()
-// Opens the connection pool and verifies connectivity before returning.
 export async function InitDB() {
-  validateConfig();
+  const required = ["DB_HOST", "DB_USERNAME", "DB_PASSWORD", "DB_NAME"];
+  const missing = required.filter(k => !process.env[k]);
+  if (missing.length > 0) {
+    console.warn(`⚠️  Missing DB config: ${missing.join(", ")} — running in MOCK MODE (no database)`);
+    return null;
+  }
 
-  DB = mysql.createPool({
-    host:             DbHostname,
-    port:             Number(DbPort),
-    user:             DbUsername,
-    password:         DbPassword,
-    database:         DbName,
-    waitForConnections: true,
-    connectionLimit:  10,
-    timezone:         "Z"
+  DB = new Pool({
+    host:     process.env.DB_HOST,
+    port:     Number(process.env.DB_PORT || 5432),
+    user:     process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    ssl:      process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
+    max:      10
   });
 
-  // Verify the connection is live (mirrors gorm.New returning an error)
-  const conn = await DB.getConnection();
-  conn.release();
-  console.log(`Connected to MySQL at ${DbHostname}:${DbPort}/${DbName}`);
-
+  // Verify connection
+  const client = await DB.connect();
+  client.release();
+  console.log(`✅ Connected to PostgreSQL at ${process.env.DB_HOST}:${process.env.DB_PORT || 5432}/${process.env.DB_NAME}`);
   return DB;
 }
 
